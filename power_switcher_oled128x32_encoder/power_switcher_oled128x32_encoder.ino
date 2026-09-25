@@ -22,17 +22,17 @@ Adafruit_SSD1306 display(128, 32, &Wire, OLED_RESET);
  *   KEY = 4
  *
  * Buttons mode:
- *   PLUS  = 2
- *   MINUS = 3
- *   OK    = 4
+ *   PLUS  = 13
+ *   MINUS = 7
+ *   OK    = 10
  */
 
-#define INPUT_PIN_PLUS   2
-#define INPUT_PIN_MINUS  3
-#define INPUT_PIN_OK     4
+#define INPUT_PIN_PLUS   13
+#define INPUT_PIN_MINUS  7
+#define INPUT_PIN_OK     10
 
 #ifndef USE_BUTTONS
-EncButton<EB_CALLBACK, INPUT_PIN_PLUS, INPUT_PIN_MINUS, INPUT_PIN_OK> enc;
+EncButton<EB_CALLBACK, 2, 3, 4> enc;
 #else
 typedef struct {
   uint8_t pin;
@@ -258,6 +258,7 @@ void setup() {
     }
   }
 
+  display.setRotation(2);
   display.display();
   delay(1000);
 
