@@ -27,39 +27,46 @@ Adafruit_SSD1306 display(128, 32, &Wire, OLED_RESET);
  *   OK    = 10
  */
 
-#define INPUT_PIN_PLUS   13
+#define INPUT_PIN_PLUS   12
 #define INPUT_PIN_MINUS  7
 #define INPUT_PIN_OK     10
 
 #ifndef USE_BUTTONS
-EncButton<EB_CALLBACK, 2, 3, 4> enc;
+  EncButton<EB_CALLBACK, 2, 3, 4> enc;
 #else
-typedef struct {
-  uint8_t pin;
-  bool last_raw_state;
-  bool stable_state;
-  uint32_t debounce_timer;
-} button_t;
+  #define BUTTON_DEBOUNCE_MS      30
+  #define BUTTON_HOLD_DELAY_MS    1000
+  #define BUTTON_REPEAT_on_time_ms 50
+
+  typedef struct {
+    uint8_t pin;
+    bool last_raw_state;
+    bool stable_state;
+    uint32_t debounce_timer;
+
+    uint32_t press_start_time;
+    uint32_t repeat_timer;
+  } button_t;
 #endif
 
 #define OUTPUT_PIN 8
 
 bool draw = false;
 
-uint16_t period_ms = 12000;
-uint16_t pause_ms = 1000;
+uint32_t on_time_ms = 1000;
+uint32_t off_time_ms = 1000;
+uint32_t *switch_time_ms = &on_time_ms;
 
 typedef enum {
   SELECTED_NONE = 0,
-  SELECTED_PERIOD,
-  SELECTED_PAUSE,
+  SELECTED_ON_TIME,
+  SELECTED_OFF_TIME,
   SELECTED_STATE
 } selected_param_t;
 
 selected_param_t param = SELECTED_NONE;
 
-bool output = false;
-uint32_t output_timer = period_ms;
+bool output = true;
 bool output_enabled = true;
 
 uint32_t millis_prev = 0;
@@ -70,34 +77,33 @@ uint32_t millis_prev = 0;
 /* -------------------------------------------------------------------------- */
 
 void controlPlus() {
-  if (param == SELECTED_PERIOD) {
-    period_ms += 100;
+  if (param == SELECTED_ON_TIME) {
+    on_time_ms += 50;
   }
-  else if (param == SELECTED_PAUSE) {
-    pause_ms += 100;
+  else if (param == SELECTED_OFF_TIME) {
+    off_time_ms += 50;
   }
   else if (param == SELECTED_STATE) {
     output_enabled = true;
     output = true;
-    output_timer = pause_ms;
 
     digitalWrite(LED_BUILTIN, HIGH);
     digitalWrite(OUTPUT_PIN, HIGH);
   }
 
+  millis_prev = millis();
   draw = true;
 }
 
-
 void controlMinus() {
-  if (param == SELECTED_PERIOD) {
-    if (period_ms >= 100) {
-      period_ms -= 100;
+  if (param == SELECTED_ON_TIME) {
+    if (on_time_ms >= 50) {
+      on_time_ms -= 50;
     }
   }
-  else if (param == SELECTED_PAUSE) {
-    if (pause_ms >= 100) {
-      pause_ms -= 100;
+  else if (param == SELECTED_OFF_TIME) {
+    if (off_time_ms >= 50) {
+      off_time_ms -= 50;
     }
   }
   else if (param == SELECTED_STATE) {
@@ -108,18 +114,19 @@ void controlMinus() {
     digitalWrite(OUTPUT_PIN, LOW);
   }
 
+  millis_prev = millis();
   draw = true;
 }
 
 
 void controlOk() {
   if (param == SELECTED_NONE) {
-    param = SELECTED_PERIOD;
+    param = SELECTED_ON_TIME;
   }
-  else if (param == SELECTED_PERIOD) {
-    param = SELECTED_PAUSE;
+  else if (param == SELECTED_ON_TIME) {
+    param = SELECTED_OFF_TIME;
   }
-  else if (param == SELECTED_PAUSE) {
+  else if (param == SELECTED_OFF_TIME) {
     param = SELECTED_STATE;
   }
   else if (param == SELECTED_STATE) {
@@ -159,12 +166,12 @@ void encPress() {
 
 #ifdef USE_BUTTONS
 
-#define BUTTON_DEBOUNCE_MS 30
-
 button_t button_plus = {
   INPUT_PIN_PLUS,
   HIGH,
   HIGH,
+  0,
+  0,
   0
 };
 
@@ -172,6 +179,8 @@ button_t button_minus = {
   INPUT_PIN_MINUS,
   HIGH,
   HIGH,
+  0,
+  0,
   0
 };
 
@@ -179,6 +188,8 @@ button_t button_ok = {
   INPUT_PIN_OK,
   HIGH,
   HIGH,
+  0,
+  0,
   0
 };
 
@@ -194,14 +205,36 @@ bool buttonPressed(button_t *button) {
     if (raw_state != button->stable_state) {
       button->stable_state = raw_state;
 
-      /*
-       * INPUT_PULLUP:
-       * LOW = button pressed
-       */
       if (button->stable_state == LOW) {
+        button->press_start_time = millis();
+        button->repeat_timer = millis();
+
         return true;
       }
+      else {
+        button->press_start_time = 0;
+        button->repeat_timer = 0;
+      }
     }
+  }
+
+  return false;
+}
+
+bool buttonRepeat(button_t *button) {
+  if (button->stable_state != LOW) {
+    return false;
+  }
+
+  uint32_t now = millis();
+
+  if ((now - button->press_start_time) < BUTTON_HOLD_DELAY_MS) {
+    return false;
+  }
+
+  if ((now - button->repeat_timer) >= BUTTON_REPEAT_on_time_ms) {
+    button->repeat_timer = now;
+    return true;
   }
 
   return false;
@@ -218,6 +251,14 @@ void buttonsTick() {
 
   if (buttonPressed(&button_ok)) {
     controlOk();
+  }
+
+  if (buttonRepeat(&button_plus)) {
+    controlPlus();
+  }
+
+  if (buttonRepeat(&button_minus)) {
+    controlMinus();
   }
 }
 
@@ -271,39 +312,23 @@ void setup() {
 /* -------------------------------------------------------------------------- */
 
 void loop() {
-  if (millis() - millis_prev >= 100) {
-    millis_prev = millis();
+  if (output_enabled) {
+    if (millis() - millis_prev >= (*switch_time_ms)) {
+      millis_prev = millis();
 
-    if (output_enabled) {
       if (output) {
-        if (output_timer > 100) {
-          output_timer -= 100;
-        }
-        else {
-          output = false;
-
-          digitalWrite(LED_BUILTIN, LOW);
-          digitalWrite(OUTPUT_PIN, LOW);
-
-          output_timer = period_ms;
-        }
+        switch_time_ms = &off_time_ms;
+        output = false;
       }
       else {
-        if (output_timer > 100) {
-          output_timer -= 100;
-        }
-        else {
-          output = true;
-
-          digitalWrite(LED_BUILTIN, HIGH);
-          digitalWrite(OUTPUT_PIN, HIGH);
-
-          output_timer = pause_ms;
-        }
+        switch_time_ms = &on_time_ms;
+        output = true;
       }
+
+      digitalWrite(LED_BUILTIN, output);
+      digitalWrite(OUTPUT_PIN, output);
     }
   }
-
 
   if (draw) {
     draw = false;
@@ -315,21 +340,21 @@ void loop() {
 
     display.setCursor(0, 0);
 
-    if (param == SELECTED_PERIOD) {
+    if (param == SELECTED_ON_TIME) {
       display.print(F(">"));
     }
 
-    display.print(F("Period:"));
-    display.print(period_ms, DEC);
+    display.print(F("ON TIME:"));
+    display.print(on_time_ms, DEC);
     display.println(F("ms"));
 
 
-    if (param == SELECTED_PAUSE) {
+    if (param == SELECTED_OFF_TIME) {
       display.print(F(">"));
     }
 
-    display.print(F("Pause:"));
-    display.print(pause_ms, DEC);
+    display.print(F("OFF TIME:"));
+    display.print(off_time_ms, DEC);
     display.println(F("ms"));
 
 
@@ -338,10 +363,10 @@ void loop() {
     }
 
     if (output_enabled) {
-      display.println(F("State: On"));
+      display.println(F("STATE: On"));
     }
     else {
-      display.println(F("State: Off"));
+      display.println(F("STATE: Off"));
     }
 
     display.display();
